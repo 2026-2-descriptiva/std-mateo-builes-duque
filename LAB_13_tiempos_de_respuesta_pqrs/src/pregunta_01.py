@@ -1,64 +1,104 @@
+import os
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 
+SUBMISSION_DIR = Path("submission")
+DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Una entidad pública recibe peticiones, quejas, reclamos y sugerencias
-    (PQRS) por dos canales, la página web y las cartas, y la ley le da 15 días
-    hábiles para responder cada una. Su tarea es medir si la entidad cumple
-    ese plazo.
 
-    Los archivos `data/historical_requests_web.csv.gz` y
-    `data/historical_requests_letter.csv.gz` tienen una fila por solicitud
-    recibida entre 2016 y 2021 por cada canal, con su identificador
-    (`record_id`), la fecha de entrada (`in_date`), el día de la semana de
-    entrada (`day_name`) y la fecha de respuesta (`out_date`). Si `out_date`
-    está vacía, la solicitud todavía no ha sido respondida.
+def _business_days(in_date, out_date):
+    # count Mon-Fri days strictly after in_date, up to and including out_date
+    start = (in_date + pd.Timedelta(days=1)).values.astype("datetime64[D]")
+    end = (out_date + pd.Timedelta(days=1)).values.astype("datetime64[D]")
+    return np.busday_count(start, end)
 
-    Tenga en cuenta lo siguiente:
 
-    - Algunas solicitudes aparecen repetidas: elimine las filas idénticas
-      dentro de cada canal, para contar cada solicitud una sola vez. Las
-      filas sin `record_id` son solicitudes válidas.
-    - Llame `letter` al canal de las cartas y `web` al de la página web.
-    - Los días hábiles de respuesta son los días de lunes a viernes
-      posteriores a la fecha de entrada, hasta la fecha de respuesta
-      incluida. Por ejemplo, una solicitud que entra un viernes y se responde
-      el lunes siguiente tardó 1 día hábil. No considere los festivos.
-    - Los días calendario de respuesta son la diferencia entre la fecha de
-      respuesta y la de entrada.
-    - Una solicitud cumple el plazo si fue respondida en 15 días hábiles o
-      menos. Una solicitud pendiente no ha cumplido el plazo.
-    - `on_time_rate` es la proporción de solicitudes que cumplen el plazo,
-      sobre el total de solicitudes, incluidas las pendientes.
-    - Las medianas de días se calculan solamente con las solicitudes
-      respondidas.
+def pregunta_01():
+    os.makedirs(SUBMISSION_DIR, exist_ok=True)
 
-    Genere tres archivos en `submission/`, sin el índice de Pandas y con las
-    columnas en el orden indicado:
+    frames = []
+    for channel, fname in [("letter", "historical_requests_letter.csv.gz"),
+                            ("web", "historical_requests_web.csv.gz")]:
+        df = pd.read_csv(f"data/{fname}", parse_dates=["in_date", "out_date"])
+        df = df.drop_duplicates()
+        df["channel"] = channel
+        frames.append(df)
 
-    1. `channel_summary.csv`, con una fila por canal, en orden alfabético:
-       `channel`, `requests`, `answered`, `pending`,
-       `median_business_days` y `on_time_rate`.
+    df = pd.concat(frames, ignore_index=True)
 
-    2. `yearly_summary.csv`, con una fila por año de entrada y canal,
-       ordenada por año y luego por canal: `year`, `channel`, `requests`,
-       `pending` y `on_time_rate`.
+    answered = df["out_date"].notna()
+    df_ans = df[answered].copy()
+    df_ans["calendar_days"] = (df_ans["out_date"] - df_ans["in_date"]).dt.days
+    df_ans["business_days"] = _business_days(df_ans["in_date"], df_ans["out_date"])
+    df_ans["on_time"] = df_ans["business_days"] <= 15
 
-    3. `entry_day_summary.csv`, con una fila por día de entrada, de lunes a
-       domingo, con los dos canales juntos: `day_name`, `requests`,
-       `median_calendar_days` y `median_business_days`.
+    # on_time for all (pending = not on_time)
+    df["on_time"] = False
+    df.loc[df_ans.index, "on_time"] = df_ans["on_time"]
 
-    Observe en el tercer archivo cómo cambia la lectura del tiempo de
-    respuesta según se cuenten días calendario o días hábiles.
+    # channel_summary
+    def ch_agg(g):
+        g_ans = df_ans[df_ans["channel"] == g.name]
+        return pd.Series({
+            "requests": len(g),
+            "answered": answered[g.index].sum(),
+            "pending": (~answered[g.index]).sum(),
+            "median_business_days": g_ans["business_days"].median(),
+            "on_time_rate": round(g["on_time"].mean(), 4),
+        })
 
-    La función también debe retornar las tres tablas, en el mismo orden.
+    channels = (
+        df.groupby("channel")
+        .apply(ch_agg, include_groups=False)
+        .reset_index()
+        .sort_values("channel")
+    )
+    channels[["requests", "answered", "pending"]] = channels[["requests", "answered", "pending"]].astype(int)
+    channels.to_csv(SUBMISSION_DIR / "channel_summary.csv", index=False)
 
-    Ejemplo del formato de `channel_summary.csv`:
+    # yearly_summary
+    df["year"] = df["in_date"].dt.year
 
-        channel,requests,answered,pending,median_business_days,on_time_rate
-        letter,28138,...
-        ...
-    """
+    def yr_agg(g):
+        return pd.Series({
+            "requests": len(g),
+            "pending": (~answered[g.index]).sum(),
+            "on_time_rate": round(g["on_time"].mean(), 4),
+        })
 
-    raise NotImplementedError
+    yearly = (
+        df.groupby(["year", "channel"])
+        .apply(yr_agg, include_groups=False)
+        .reset_index()
+        .sort_values(["year", "channel"])
+        .reset_index(drop=True)
+    )
+    yearly[["requests", "pending"]] = yearly[["requests", "pending"]].astype(int)
+    yearly.to_csv(SUBMISSION_DIR / "yearly_summary.csv", index=False)
+
+    # entry_day_summary (both channels combined)
+    df_ans_all = df_ans.copy()
+    df_ans_all = df_ans_all.set_index("day_name")
+
+    def day_agg(g):
+        g_ans = df_ans_all[df_ans_all.index == g.name] if g.name in df_ans_all.index else df_ans_all.iloc[0:0]
+        g_ans = df_ans[df_ans["day_name"] == g.name]
+        return pd.Series({
+            "requests": len(g),
+            "median_calendar_days": g_ans["calendar_days"].median(),
+            "median_business_days": g_ans["business_days"].median(),
+        })
+
+    days = (
+        df.groupby("day_name")
+        .apply(day_agg, include_groups=False)
+        .reset_index()
+    )
+    days["day_name"] = pd.Categorical(days["day_name"], categories=DAY_ORDER, ordered=True)
+    days = days.sort_values("day_name").reset_index(drop=True)
+    days["requests"] = days["requests"].astype(int)
+    days.to_csv(SUBMISSION_DIR / "entry_day_summary.csv", index=False)
+
+    return channels, yearly, days
