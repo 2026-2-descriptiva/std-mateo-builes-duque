@@ -1,53 +1,76 @@
+import os
+from pathlib import Path
+
 import pandas as pd
 
+SUBMISSION_DIR = Path("submission")
 
-def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Una cadena de suministros de oficina vende mucho, pero la gerencia
-    sospecha que parte de esas ventas no deja utilidad. El archivo
-    `data/superstore_orders.csv.gz` tiene una fila por línea de pedido, con
-    el número de pedido (`Order ID`), las ventas (`Sales`), la utilidad
-    (`Profit`), el descuento aplicado (`Discount`, como proporción), el
-    segmento del cliente (`Customer Segment`) y la categoría del producto
-    (`Product Category`). Una utilidad negativa significa que la línea se
-    vendió con pérdida.
 
-    Use estas definiciones:
+def _discount_band(d):
+    if d == 0:
+        return "0%"
+    elif d <= 0.05:
+        return "1%-5%"
+    elif d <= 0.10:
+        return "6%-10%"
+    return "más de 10%"
 
-    - Margen (`profit_margin`): utilidad sobre ventas.
-    - Línea con pérdida: una línea cuya utilidad es negativa.
-    - `loss_line_rate`: la proporción de líneas con pérdida.
-    - `lost_profit`: la suma de las pérdidas de las líneas con pérdida,
-      escrita como número positivo.
-    - Rango de descuento (`discount_band`): `0%` si no hubo descuento,
-      `1%-5%` si fue mayor que 0 y hasta 5 %, `6%-10%` si fue mayor que 5 % y
-      hasta 10 %, y `más de 10%` en otro caso.
 
-    Genere tres archivos en `submission/`, sin el índice de Pandas y con las
-    columnas en el orden indicado:
+BAND_ORDER = ["0%", "1%-5%", "6%-10%", "más de 10%"]
 
-    1. `profitability_summary.csv`, con una sola fila: `lines` (cantidad de
-       líneas), `orders` (pedidos distintos), `sales`, `profit`,
-       `profit_margin`, `loss_lines` (cantidad de líneas con pérdida),
-       `loss_line_rate` y `lost_profit`.
 
-    2. `discount_summary.csv`, con una fila por rango de descuento, en el
-       orden en que se definieron arriba: `discount_band`, `lines`, `sales`,
-       `profit`, `profit_margin`, `loss_line_rate` y `lost_profit`.
+def _agg(df):
+    loss = df[df["Profit"] < 0]
+    return pd.Series({
+        "lines": len(df),
+        "sales": df["Sales"].sum(),
+        "profit": df["Profit"].sum(),
+        "profit_margin": df["Profit"].sum() / df["Sales"].sum(),
+        "loss_line_rate": (df["Profit"] < 0).mean(),
+        "lost_profit": (-loss["Profit"]).sum(),
+    })
 
-    3. `priority_segments.csv`, con los cinco segmentos segmento–categoría
-       que más utilidad pierden: `Customer Segment`, `Product Category`,
-       `lines`, `sales`, `profit`, `profit_margin` y `lost_profit`. Considere
-       solamente segmentos con al menos 100 líneas y ordénelos por
-       `lost_profit` de mayor a menor.
 
-    La función también debe retornar las tres tablas, en el mismo orden.
+def pregunta_01():
+    os.makedirs(SUBMISSION_DIR, exist_ok=True)
 
-    Ejemplo del formato de `discount_summary.csv`:
+    df = pd.read_csv("data/superstore_orders.csv.gz", sep=";", decimal=",")
 
-        discount_band,lines,sales,profit,profit_margin,loss_line_rate,...
-        0%,166,170539.05,29472.3789,0.1728,0.488,...
-        ...
-    """
+    loss = df[df["Profit"] < 0]
 
-    raise NotImplementedError
+    summary = pd.DataFrame([{
+        "lines": len(df),
+        "orders": df["Order ID"].nunique(),
+        "sales": df["Sales"].sum(),
+        "profit": df["Profit"].sum(),
+        "profit_margin": df["Profit"].sum() / df["Sales"].sum(),
+        "loss_lines": (df["Profit"] < 0).sum(),
+        "loss_line_rate": (df["Profit"] < 0).mean(),
+        "lost_profit": (-loss["Profit"]).sum(),
+    }])
+    summary.to_csv(SUBMISSION_DIR / "profitability_summary.csv", index=False)
+
+    df["discount_band"] = df["Discount"].apply(_discount_band)
+    discounts = (
+        df.groupby("discount_band", sort=False)
+        .apply(_agg, include_groups=False)
+        .reset_index()
+        .set_index("discount_band")
+        .loc[BAND_ORDER]
+        .reset_index()
+    )
+    discounts.insert(1, "lines", discounts.pop("lines"))
+    discounts.to_csv(SUBMISSION_DIR / "discount_summary.csv", index=False)
+
+    seg_agg = (
+        df.groupby(["Customer Segment", "Product Category"], sort=False)
+        .apply(_agg, include_groups=False)
+        .reset_index()
+    )
+    seg_agg = seg_agg[seg_agg["lines"] >= 100]
+    seg_agg = seg_agg.nlargest(5, "lost_profit")
+    seg_agg.insert(2, "lines", seg_agg.pop("lines"))
+    segments = seg_agg[["Customer Segment", "Product Category", "lines", "sales", "profit", "profit_margin", "lost_profit"]]
+    segments.to_csv(SUBMISSION_DIR / "priority_segments.csv", index=False)
+
+    return summary, discounts, segments
