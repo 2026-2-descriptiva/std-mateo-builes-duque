@@ -1,3 +1,8 @@
+import csv
+import gzip
+from collections import defaultdict
+
+
 def pregunta_12():
     """
     Para cada letra de la primera columna (`letter`), sume todos los valores
@@ -8,5 +13,10 @@ def pregunta_12():
 
         {"A": 177, "B": 187, "C": 114, ...}
     """
-
-    raise NotImplementedError
+    with gzip.open("data/data.csv.gz", "rt") as f:
+        reader = csv.reader(f, delimiter="\t")
+        sums = defaultdict(int)
+        for row in reader:
+            total = sum(int(pair.split(":")[1]) for pair in row[4].split(","))
+            sums[row[0]] += total
+    return dict(sorted(sums.items()))

@@ -1,3 +1,8 @@
+import csv
+import gzip
+from collections import defaultdict
+
+
 def pregunta_08():
     """
     Repita la pregunta 7, pero ahora cada lista de letras debe contener cada
@@ -8,5 +13,9 @@ def pregunta_08():
 
         [(0, ["C"]), (1, ["B", "E"]), (2, ["A", "E"]), ...]
     """
-
-    raise NotImplementedError
+    with gzip.open("data/data.csv.gz", "rt") as f:
+        reader = csv.reader(f, delimiter="\t")
+        groups = defaultdict(set)
+        for row in reader:
+            groups[int(row[1])].add(row[0])
+    return [(val, sorted(letters)) for val, letters in sorted(groups.items())]

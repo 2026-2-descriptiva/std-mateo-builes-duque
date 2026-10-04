@@ -1,3 +1,8 @@
+import csv
+import gzip
+from collections import defaultdict
+
+
 def pregunta_06():
     """
     La quinta columna (`metrics`) contiene pares `clave:valor` separados por
@@ -12,5 +17,11 @@ def pregunta_06():
 
         [("aaa", 1, 9), ("bbb", 1, 9), ...]
     """
-
-    raise NotImplementedError
+    with gzip.open("data/data.csv.gz", "rt") as f:
+        reader = csv.reader(f, delimiter="\t")
+        groups = defaultdict(list)
+        for row in reader:
+            for pair in row[4].split(","):
+                k, v = pair.split(":")
+                groups[k].append(int(v))
+    return [(k, min(vals), max(vals)) for k, vals in sorted(groups.items())]
