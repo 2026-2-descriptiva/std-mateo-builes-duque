@@ -1,83 +1,111 @@
+import json
+import os
+from pathlib import Path
+
+import pandas as pd
+
+SUBMISSION_DIR = Path("submission")
+K = 5
+
+
+def _age_group(age):
+    if age < 30:
+        return "18-29"
+    elif age < 40:
+        return "30-39"
+    elif age < 50:
+        return "40-49"
+    return "50-64"
+
+
+def _bmi_group(bmi):
+    if bmi < 18.5:
+        return "bajo peso"
+    elif bmi < 25:
+        return "normal"
+    elif bmi < 30:
+        return "sobrepeso"
+    return "obesidad"
+
+
+def _children_group(c):
+    if c == 0:
+        return "0"
+    elif c <= 2:
+        return "1-2"
+    return "3+"
+
+
 def pregunta_01():
-    """
-    Una aseguradora quiere publicar datos de sus afiliados para que un grupo
-    de investigación estudie el costo de los seguros, sin que nadie pueda
-    reconocer a una persona. El archivo `data/insurance.csv.gz` tiene una fila
-    por afiliado con su edad (`age`), sexo (`sex`), índice de masa corporal
-    (`bmi`), número de hijos (`children`), si fuma (`smoker`), región
-    (`region`) y el costo de su seguro (`charges`).
+    os.makedirs(SUBMISSION_DIR, exist_ok=True)
 
-    El archivo no tiene nombres ni documentos, pero eso no basta: la edad, el
-    sexo, el índice de masa corporal, el número de hijos y la región son
-    cuasi-identificadores, porque combinados pueden señalar a una persona.
-    `smoker` es el atributo sensible que se quiere proteger.
+    df = pd.read_csv("data/insurance.csv.gz")
 
-    En este laboratorio usted va a medir el riesgo de reidentificación y a
-    decidir qué publicar. Use estas definiciones:
+    df["age_group"] = df["age"].apply(_age_group)
+    df["bmi_group"] = df["bmi"].apply(_bmi_group)
+    df["children_group"] = df["children"].apply(_children_group)
 
-    - Una clase de equivalencia es un grupo de registros con los mismos
-      valores en todos los cuasi-identificadores. Un conjunto de datos cumple
-      k-anonimato si toda clase tiene al menos k registros. Use k = 5.
-    - `age_group`: `18-29`, `30-39`, `40-49` o `50-64`.
-    - `bmi_group`: `bajo peso` (menos de 18.5), `normal` (desde 18.5 y menos
-      de 25), `sobrepeso` (desde 25 y menos de 30) u `obesidad` (30 o más).
-    - `children_group`: `0`, `1-2` o `3+`.
+    orig_qi = ["age", "sex", "bmi", "children", "region"]
+    orig_sizes = df.groupby(orig_qi)["age"].transform("size")
+    original_k = int(orig_sizes.min())
+    original_unique_records = int((orig_sizes == 1).sum())
 
-    Evalúe dos esquemas de generalización:
+    schemes = {}
+    for scheme_name, qi in [
+        ("with_children", ["age_group", "sex", "bmi_group", "children_group", "region"]),
+        ("without_children", ["age_group", "sex", "bmi_group", "region"]),
+    ]:
+        class_sizes = df.groupby(qi)["age"].transform("size")
+        eq_classes = int(df.groupby(qi).ngroups)
+        k_before = int(class_sizes.min())
 
-    - `with_children`: `age_group`, `sex`, `bmi_group`, `children_group` y
-      `region`.
-    - `without_children`: `age_group`, `sex`, `bmi_group` y `region`; el
-      número de hijos no se publica.
+        mask_keep = class_sizes >= K
+        df_pub = df[mask_keep]
+        suppressed = int((~mask_keep).sum())
+        published = int(mask_keep.sum())
+        pub_classes = int(df_pub.groupby(qi).ngroups)
 
-    En cada esquema, suprima (no publique) los registros de las clases con
-    menos de 5 registros. Luego, entre las clases publicadas, identifique las
-    que no tienen diversidad en el atributo sensible, es decir, aquellas en
-    las que todos los afiliados fuman o ninguno fuma: en esas clases, saber
-    que alguien pertenece a ellas revela si fuma.
+        diversity = df_pub.groupby(qi)["smoker"].transform("nunique")
+        classes_no_div = int((df_pub.groupby(qi)["smoker"].nunique() == 1).sum())
+        records_no_div = int((diversity == 1).sum())
 
-    Escriba `submission/privacy_report.json` con estas claves:
-
-    - `original_k`: el menor tamaño de clase usando los cuasi-identificadores
-      originales, sin generalizar.
-    - `original_unique_records`: cuántos registros son los únicos de su clase
-      con los cuasi-identificadores originales.
-    - `schemes`: un diccionario con una entrada por esquema (`with_children` y
-      `without_children`), cada una con las claves `quasi_identifiers` (la
-      lista de columnas del esquema), `equivalence_classes` (clases antes de
-      suprimir), `k_before_suppression`, `suppressed_records`,
-      `published_records`, `published_classes`,
-      `classes_without_smoker_diversity` y
-      `records_without_smoker_diversity`.
-    - `selected_scheme`: el esquema que suprime menos registros.
-    - `mean_charges_original` y `mean_charges_published`: el costo promedio
-      de todos los afiliados y el de los registros publicados con el esquema
-      seleccionado.
-    - `smoker_rate_original` y `smoker_rate_published`: la proporción de
-      fumadores en ambos casos.
-
-    Escriba también `submission/insurance_published.csv`, sin el índice de
-    Pandas, con los registros publicados del esquema seleccionado, en el
-    mismo orden del archivo original, y las columnas del esquema seguidas de
-    `smoker` y `charges`.
-
-    La función también debe retornar el reporte como un diccionario.
-
-    Ejemplo del formato del reporte:
-
-        {
-          "original_k": 1,
-          "original_unique_records": 1330,
-          "schemes": {
-            "with_children": {
-              "quasi_identifiers": ["age_group", "sex", ...],
-              "equivalence_classes": 278,
-              ...
-            },
-            ...
-          },
-          ...
+        schemes[scheme_name] = {
+            "quasi_identifiers": qi,
+            "equivalence_classes": eq_classes,
+            "k_before_suppression": k_before,
+            "suppressed_records": suppressed,
+            "published_records": published,
+            "published_classes": pub_classes,
+            "classes_without_smoker_diversity": classes_no_div,
+            "records_without_smoker_diversity": records_no_div,
         }
-    """
 
-    raise NotImplementedError
+    selected = (
+        "without_children"
+        if schemes["without_children"]["suppressed_records"] <= schemes["with_children"]["suppressed_records"]
+        else "with_children"
+    )
+
+    sel_qi = schemes[selected]["quasi_identifiers"]
+    sel_sizes = df.groupby(sel_qi)["age"].transform("size")
+    df_pub_sel = df[sel_sizes >= K]
+
+    report = {
+        "original_k": original_k,
+        "original_unique_records": original_unique_records,
+        "schemes": schemes,
+        "selected_scheme": selected,
+        "mean_charges_original": round(df["charges"].mean(), 4),
+        "mean_charges_published": round(df_pub_sel["charges"].mean(), 4),
+        "smoker_rate_original": round((df["smoker"] == "yes").mean(), 4),
+        "smoker_rate_published": round((df_pub_sel["smoker"] == "yes").mean(), 4),
+    }
+
+    (SUBMISSION_DIR / "privacy_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    pub_cols = sel_qi + ["smoker", "charges"]
+    df_pub_sel[pub_cols].to_csv(SUBMISSION_DIR / "insurance_published.csv", index=False)
+
+    return report
