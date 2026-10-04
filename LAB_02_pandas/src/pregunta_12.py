@@ -1,3 +1,6 @@
+import pandas as pd
+
+
 def pregunta_12():
     """
     En `data/tbl2.tsv`, cada valor de la columna `c0` aparece en varias
@@ -14,5 +17,14 @@ def pregunta_12():
         2    2        ccc:6,ddd:2,ggg:5,jjj:1
         ...
     """
-
-    raise NotImplementedError
+    df = pd.read_csv("data/tbl2.tsv", sep="\t")
+    df["pair"] = df["c5a"] + ":" + df["c5b"].astype(int).astype(str)
+    result = (
+        df.groupby("c0")["pair"]
+        .agg(lambda x: ",".join(sorted(x)))
+        .reset_index()
+        .rename(columns={"pair": "c5"})
+        .sort_values("c0")
+        .reset_index(drop=True)
+    )
+    return result
